@@ -23,10 +23,10 @@ def get_clip_embeddings(vocabulary, prompt='a '):
     return emb
 
 BUILDIN_CLASSIFIER = {
-    'lvis': 'datasets/metadata/lvis_v1_clip_a+cname.npy',
-    'objects365': 'datasets/metadata/o365_clip_a+cnamefix.npy',
-    'openimages': 'datasets/metadata/oid_clip_a+cname.npy',
-    'coco': 'datasets/metadata/coco_clip_a+cname.npy',
+    'lvis': 'Detic/datasets/metadata/lvis_v1_clip_a+cname.npy',
+    'objects365': 'Detic/datasets/metadata/o365_clip_a+cnamefix.npy',
+    'openimages': 'Detic/datasets/metadata/oid_clip_a+cname.npy',
+    'coco': 'Detic/datasets/metadata/coco_clip_a+cname.npy',
 }
 
 BUILDIN_METADATA_PATH = {
@@ -35,6 +35,34 @@ BUILDIN_METADATA_PATH = {
     'openimages': 'oid_val_expanded',
     'coco': 'coco_2017_val',
 }
+
+def _create_text_labels(classes, scores, class_names, is_crowd=None):
+    ## from detectron2.utils.visualizer.py
+    """
+    Args:
+        classes (list[int] or None):
+        scores (list[float] or None):
+        class_names (list[str] or None):
+        is_crowd (list[bool] or None):
+
+    Returns:
+        list[str] or None
+    """
+    labels = None
+    if classes is not None:
+        if class_names is not None and len(class_names) > 0:
+            labels = [class_names[i] for i in classes]
+        else:
+            labels = [str(i) for i in classes]
+    if scores is not None:
+        if labels is None:
+            labels = ["{:.0f}%".format(s * 100) for s in scores]
+        else:
+            labels = ["{} {:.0f}%".format(l, s * 100) for l, s in zip(labels, scores)]
+    if labels is not None and is_crowd is not None:
+        labels = [l + ("|crowd" if crowd else "") for l, crowd in zip(labels, is_crowd)]
+    return labels
+
 
 class VisualizationDemo(object):
     def __init__(self, cfg, args, 
@@ -54,7 +82,6 @@ class VisualizationDemo(object):
             self.metadata = MetadataCatalog.get(
                 BUILDIN_METADATA_PATH[args.vocabulary])
             classifier = BUILDIN_CLASSIFIER[args.vocabulary]
-
         num_classes = len(self.metadata.thing_classes)
         self.cpu_device = torch.device("cpu")
         self.instance_mode = instance_mode
@@ -67,7 +94,7 @@ class VisualizationDemo(object):
             self.predictor = DefaultPredictor(cfg)
         reset_cls_test(self.predictor.model, classifier, num_classes)
 
-    def run_on_image(self, image):
+    def run_on_image(self, image, visualize=False):
         """
         Args:
             image (np.ndarray): an image of shape (H, W, C) (in BGR order).
@@ -80,23 +107,36 @@ class VisualizationDemo(object):
         vis_output = None
         predictions = self.predictor(image)
         # Convert image from OpenCV BGR format to Matplotlib RGB format.
-        image = image[:, :, ::-1]
-        visualizer = Visualizer(image, self.metadata, instance_mode=self.instance_mode)
-        if "panoptic_seg" in predictions:
-            panoptic_seg, segments_info = predictions["panoptic_seg"]
-            vis_output = visualizer.draw_panoptic_seg_predictions(
-                panoptic_seg.to(self.cpu_device), segments_info
-            )
-        else:
-            if "sem_seg" in predictions:
-                vis_output = visualizer.draw_sem_seg(
-                    predictions["sem_seg"].argmax(dim=0).to(self.cpu_device)
+        instances = predictions["instances"].to('cpu')
+        boxes = instances.pred_boxes if instances.has("pred_boxes") else None
+        scores = instances.scores if instances.has("scores") else None
+        classes = instances.pred_classes.tolist() if instances.has("pred_classes") else None
+        labels = _create_text_labels(classes, scores, self.model.metadata.get("thing_classes", None))
+         # keypoints = instances.pred_keypoints if instances.has("pred_keypoints") else None
+        results = {
+            'boxes': boxes,
+            'scores': scores,
+            'labels': labels
+        }
+        if visualize:
+            image = image[:, :, ::-1]
+            visualizer = Visualizer(image, self.metadata, instance_mode=self.instance_mode)
+            if "panoptic_seg" in predictions:
+                panoptic_seg, segments_info = predictions["panoptic_seg"]
+                vis_output = visualizer.draw_panoptic_seg_predictions(
+                    panoptic_seg.to(self.cpu_device), segments_info
                 )
-            if "instances" in predictions:
-                instances = predictions["instances"].to(self.cpu_device)
-                vis_output = visualizer.draw_instance_predictions(predictions=instances)
-
-        return predictions, vis_output
+            else:
+                if "sem_seg" in predictions:
+                    vis_output = visualizer.draw_sem_seg(
+                        predictions["sem_seg"].argmax(dim=0).to(self.cpu_device)
+                    )
+                if "instances" in predictions:
+                    instances = predictions["instances"].to(self.cpu_device)
+                    vis_output = visualizer.draw_instance_predictions(predictions=instances)
+        else:
+            vis_output = None
+        return results, vis_output
 
     def _frame_from_video(self, video):
         while video.isOpened():
