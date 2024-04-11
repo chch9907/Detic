@@ -111,7 +111,7 @@ class VisualizationDemo(object):
         boxes = instances.pred_boxes if instances.has("pred_boxes") else None
         scores = instances.scores if instances.has("scores") else None
         classes = instances.pred_classes.tolist() if instances.has("pred_classes") else None
-        labels = _create_text_labels(classes, scores, self.model.metadata.get("thing_classes", None))
+        labels = _create_text_labels(classes, scores, self.metadata.get("thing_classes", None))
          # keypoints = instances.pred_keypoints if instances.has("pred_keypoints") else None
         results = {
             'boxes': boxes,
